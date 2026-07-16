@@ -143,55 +143,97 @@ PAGE = """
     * { box-sizing: border-box; }
     html, body { height: 100%; }
     :root {
-      --bg: #f4f6f9;
       --panel: #ffffff;
-      --border: #e5e8ec;
-      --text: #1f2933;
+      --border: #e6e9ef;
+      --text: #111827;
       --muted: #6b7280;
-      --accent: #2563eb;
-      --accent-dark: #1d4ed8;
-      --bot-bg: #f1f4f8;
+      --accent: #4f46e5;
+      --accent-dark: #4338ca;
+      --bot-bg: #f5f7fb;
+      --shadow: 0 24px 60px -12px rgba(15, 23, 42, .28);
     }
     body {
       font-family: 'Segoe UI', system-ui, -apple-system, Arial, sans-serif;
-      margin: 0; color: var(--text); background: var(--bg);
-      display: flex; flex-direction: column; height: 100vh;
+      margin: 0; color: var(--text);
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh; padding: 28px 20px;
+      background: #eef1f8;
+      background-image:
+        radial-gradient(900px 500px at 12% 0%, rgba(99,102,241,.30), transparent 60%),
+        radial-gradient(800px 500px at 88% 100%, rgba(14,165,233,.26), transparent 60%),
+        linear-gradient(135deg, #f6f8fd 0%, #e8edf9 100%);
+      background-attachment: fixed;
     }
 
     .app {
-      display: flex; flex-direction: column; height: 100vh;
-      width: 100%; max-width: 760px; margin: 0 auto;
+      display: flex; flex-direction: column;
+      height: min(880px, calc(100vh - 56px));
+      width: 100%; max-width: 820px;
       background: var(--panel);
-      border-left: 1px solid var(--border); border-right: 1px solid var(--border);
+      border: 1px solid rgba(255,255,255,.7);
+      border-radius: 20px; box-shadow: var(--shadow); overflow: hidden;
     }
 
     header {
       padding: 18px 24px; border-bottom: 1px solid var(--border);
-      display: flex; align-items: center; gap: 12px; background: var(--panel);
+      display: flex; align-items: center; gap: 14px;
+      background: linear-gradient(135deg, #4f46e5 0%, #6366f1 55%, #0ea5e9 100%);
+      color: #fff;
     }
     header .logo {
-      width: 38px; height: 38px; border-radius: 8px; flex: none;
-      background: var(--accent); color: #fff;
-      display: flex; align-items: center; justify-content: center; font-size: 18px;
+      width: 42px; height: 42px; border-radius: 12px; flex: none;
+      background: rgba(255,255,255,.18); color: #fff;
+      border: 1px solid rgba(255,255,255,.3);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px; font-weight: 700; letter-spacing: .5px;
     }
     header h1 { margin: 0; font-size: 17px; font-weight: 600; }
-    header p  { margin: 2px 0 0; font-size: 12.5px; color: var(--muted); }
+    header p  { margin: 3px 0 0; font-size: 12.5px; color: rgba(255,255,255,.82); }
+    header .status {
+      margin-left: auto; display: flex; align-items: center; gap: 7px;
+      font-size: 12px; color: rgba(255,255,255,.9);
+      background: rgba(255,255,255,.15); border: 1px solid rgba(255,255,255,.25);
+      padding: 6px 12px; border-radius: 999px;
+    }
+    header .dot {
+      width: 7px; height: 7px; border-radius: 50%; background: #4ade80;
+      box-shadow: 0 0 0 0 rgba(74,222,128,.7); animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      70%  { box-shadow: 0 0 0 7px rgba(74,222,128,0); }
+      100% { box-shadow: 0 0 0 0 rgba(74,222,128,0); }
+    }
 
     #chat {
-      flex: 1; overflow-y: auto; padding: 24px;
-      display: flex; flex-direction: column; gap: 14px;
+      flex: 1; overflow-y: auto; padding: 26px 24px;
+      display: flex; flex-direction: column; gap: 16px;
+      background:
+        radial-gradient(circle at 1px 1px, rgba(79,70,229,.09) 1px, transparent 0) 0 0 / 22px 22px,
+        linear-gradient(180deg, #fbfcfe 0%, #f7f9fc 100%);
+      scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent;
     }
+    #chat::-webkit-scrollbar { width: 8px; }
+    #chat::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
+
     .msg {
-      max-width: 76%; padding: 12px 16px; border-radius: 12px;
-      line-height: 1.5; white-space: pre-wrap; font-size: 14.5px;
+      max-width: 76%; padding: 12px 16px; border-radius: 16px;
+      line-height: 1.55; white-space: pre-wrap; font-size: 14.5px;
+      animation: rise .22s ease-out;
+    }
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: none; }
     }
     .user {
-      align-self: flex-end; background: var(--accent); color: #fff;
-      border-bottom-right-radius: 3px;
+      align-self: flex-end; color: #fff;
+      background: linear-gradient(135deg, var(--accent) 0%, #6366f1 100%);
+      border-bottom-right-radius: 4px;
+      box-shadow: 0 6px 16px -6px rgba(79,70,229,.55);
     }
     .bot  {
-      align-self: flex-start; background: var(--bot-bg); color: var(--text);
-      border: 1px solid var(--border); border-bottom-left-radius: 3px;
+      align-self: flex-start; background: var(--panel); color: var(--text);
+      border: 1px solid var(--border); border-bottom-left-radius: 4px;
+      box-shadow: 0 2px 10px -4px rgba(15,23,42,.14);
     }
 
     form {
@@ -199,26 +241,41 @@ PAGE = """
       border-top: 1px solid var(--border); background: var(--panel);
     }
     input {
-      flex: 1; padding: 12px 15px; border-radius: 8px;
-      border: 1px solid var(--border); background: #fff; color: var(--text);
+      flex: 1; padding: 13px 16px; border-radius: 12px;
+      border: 1px solid var(--border); background: #f8fafc; color: var(--text);
       font-size: 14.5px; outline: none;
+      transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
     }
-    input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(37,99,235,.12); }
+    input:focus {
+      border-color: var(--accent); background: #fff;
+      box-shadow: 0 0 0 4px rgba(79,70,229,.13);
+    }
     button {
-      padding: 12px 22px; border: none; border-radius: 8px; font-weight: 600;
-      background: var(--accent); color: #fff; font-size: 14.5px; cursor: pointer;
-      transition: background .15s ease;
+      padding: 13px 24px; border: none; border-radius: 12px; font-weight: 600;
+      background: linear-gradient(135deg, var(--accent) 0%, #6366f1 100%);
+      color: #fff; font-size: 14.5px; cursor: pointer;
+      box-shadow: 0 8px 18px -8px rgba(79,70,229,.7);
+      transition: transform .12s ease, box-shadow .15s ease, opacity .15s ease;
     }
-    button:hover:not(:disabled) { background: var(--accent-dark); }
-    button:disabled { opacity: .55; cursor: default; }
+    button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 12px 22px -8px rgba(79,70,229,.8); }
+    button:active:not(:disabled) { transform: translateY(0); }
+    button:disabled { opacity: .5; cursor: default; box-shadow: none; }
 
-    .downloads { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+    .downloads { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
     .dl {
-      display: inline-block; padding: 8px 14px; border-radius: 8px;
+      display: inline-block; padding: 9px 15px; border-radius: 10px;
       background: #eef2ff; color: var(--accent-dark); border: 1px solid #c7d2fe;
       font-size: 13.5px; font-weight: 600; text-decoration: none;
+      transition: background .15s ease, transform .12s ease;
     }
-    .dl:hover { background: #e0e7ff; }
+    .dl:hover { background: #e0e7ff; transform: translateY(-1px); }
+
+    @media (max-width: 640px) {
+      body { padding: 0; }
+      .app { height: 100vh; border-radius: 0; border: none; max-width: 100%; }
+      .msg { max-width: 88%; }
+      header .status { display: none; }
+    }
   </style>
 </head>
 <body>
@@ -229,6 +286,7 @@ PAGE = """
         <h1>Shopping Assistant</h1>
         <p>Ask about customers, orders and products</p>
       </div>
+      <div class="status"><span class="dot"></span>Online</div>
     </header>
     <div id="chat">
       <div class="msg bot">Hello. How can I help you? You can ask about customers, orders, or products.</div>
