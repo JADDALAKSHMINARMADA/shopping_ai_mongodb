@@ -1,11 +1,18 @@
 import os
 import re
+import json
+import base64
 import difflib
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template_string, send_file
 from llm import generate_query, generate_answer, format_full_list, MODEL_NAME
 from database import run_query, find_all, find_similar_names, is_empty_result
+from export_utils import rows_to_excel, rows_to_pdf
 
 app = Flask(__name__)
+
+# When a result has MORE than this many rows, don't dump it as text — offer
+# Excel/PDF downloads instead (and refuse a plain-text version).
+EXPORT_THRESHOLD = 15
 
 # Remembers the last "Did you mean X?" so a "yes" reply can re-run the query.
 # `pairs` is a list of (typed, real) tuples so multiple names are handled.
@@ -31,9 +38,64 @@ IDENTITY_ANSWER = (
 FULL_LIST_RE = re.compile(r"\b(all|every|each|entire|complete|full)\b", re.IGNORECASE)
 SUMMARY_RE = re.compile(r"\b(summar\w+|overview|brief|highlight)\b", re.IGNORECASE)
 
+# The user explicitly wants a text answer ("in text", "not pdf", ...).
+TEXT_REQUEST_RE = re.compile(
+    r"\b(in text|as text|text version|text only|plain text|not\s+(a\s+)?(pdf|excel))\b",
+    re.IGNORECASE,
+)
+
+# "give me all raw data / everything" -> export the full denormalized dataset.
+RAW_DATA_RE = re.compile(
+    r"\b(raw data|all data|full data|everything|entire data|complete data|all raw)\b",
+    re.IGNORECASE,
+)
+
+# Format words ("in text", "as pdf", "download"...) are about HOW to answer, not
+# WHAT to fetch — strip them before asking the LLM for a query so they don't
+# pollute the search.
+FORMAT_NOISE_RE = re.compile(
+    r"\b(in|as)\s+(text|pdf|excel|xlsx|a\s+file)\b|"
+    r"\bnot\s+(a\s+)?(pdf|excel|text)\b|"
+    r"\b(text|pdf|excel)\s+version\b|\bplain text\b|\btext only\b|"
+    r"\bdownload(ed|able)?\b|\bexport\b",
+    re.IGNORECASE,
+)
+
+
+def clean_for_query(question):
+    """Remove format words so the DB query reflects only what to fetch."""
+
+    cleaned = FORMAT_NOISE_RE.sub(" ", question)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .,")
+    return cleaned or question
+
 
 def wants_full_list(question):
     return bool(FULL_LIST_RE.search(question)) and not SUMMARY_RE.search(question)
+
+
+def encode_query(collection, pipeline):
+    """Pack a (collection, pipeline) into a URL-safe token for the /export link,
+    so the download re-runs the exact same query (no extra LLM call)."""
+
+    raw = json.dumps({"collection": collection, "pipeline": pipeline}).encode()
+    return base64.urlsafe_b64encode(raw).decode()
+
+
+def decode_query(token):
+    raw = base64.urlsafe_b64decode(token.encode())
+    data = json.loads(raw)
+    return data["collection"], data.get("pipeline", [])
+
+
+def download_links(collection, pipeline):
+    """The Excel + PDF download buttons for a given query."""
+
+    token = encode_query(collection, pipeline)
+    return [
+        {"label": "⬇ Excel (.xlsx)", "url": f"/export?fmt=xlsx&q={token}"},
+        {"label": "⬇ PDF", "url": f"/export?fmt=pdf&q={token}"},
+    ]
 
 
 def classify_reply(text):
@@ -135,6 +197,14 @@ PAGE = """
     }
     button:hover:not(:disabled) { background: var(--accent-dark); }
     button:disabled { opacity: .55; cursor: default; }
+
+    .downloads { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+    .dl {
+      display: inline-block; padding: 8px 14px; border-radius: 8px;
+      background: #eef2ff; color: var(--accent-dark); border: 1px solid #c7d2fe;
+      font-size: 13.5px; font-weight: 600; text-decoration: none;
+    }
+    .dl:hover { background: #e0e7ff; }
   </style>
 </head>
 <body>
@@ -187,6 +257,21 @@ PAGE = """
         });
         const data = await res.json();
         thinking.textContent = data.answer || data.error || "Sorry, something went wrong.";
+
+        // If the server offered file downloads (large result), show buttons.
+        if (data.downloads && data.downloads.length) {
+          const box = document.createElement("div");
+          box.className = "downloads";
+          data.downloads.forEach(d => {
+            const a = document.createElement("a");
+            a.className = "dl";
+            a.href = d.url;
+            a.textContent = d.label;
+            a.setAttribute("download", "");
+            box.appendChild(a);
+          });
+          thinking.appendChild(box);
+        }
       } catch (err) {
         thinking.textContent = "Error: " + err.message;
       } finally {
@@ -234,7 +319,14 @@ def ask():
                 last_suggestion["question"] = None
                 return jsonify({"answer": "No problem! What would you like to know?"})
 
-        collection, pipeline = generate_query(question)
+        # "give me all raw data / everything" -> the full denormalized dataset
+        # (users, products, quantity, price, city, order_date...). Skip the LLM.
+        if RAW_DATA_RE.search(question):
+            collection, pipeline = "order_items", [{"$project": {"_id": 0}}]
+        else:
+            # Strip format words ("in text", "as pdf") so they don't skew the query.
+            collection, pipeline = generate_query(clean_for_query(question))
+
         result = run_query(collection, pipeline)
 
         # If nothing matched, check for close (misspelled) names and ask
@@ -252,8 +344,28 @@ def ask():
                 )
                 return jsonify({"answer": answer})
 
-        # "all / every / each" (not "summary") -> list EVERY row, no AI summary.
-        if wants_full_list(question) and not is_empty_result(result):
+        # A "summary" request stays as short text even for big results.
+        if SUMMARY_RE.search(question):
+            return jsonify({"answer": generate_answer(question, result)})
+
+        # Large result (> 15 rows): don't dump as text — offer Excel/PDF only.
+        n = len(result)
+        if n > EXPORT_THRESHOLD:
+            links = download_links(collection, pipeline)
+            if TEXT_REQUEST_RE.search(question):
+                answer = (
+                    f"I'm sorry — there are {n} records, which is too many to "
+                    f"show as text. Please download them as Excel or PDF below."
+                )
+            else:
+                answer = (
+                    f"I found {n} records — too many to display here. "
+                    f"Download the full list as Excel or PDF:"
+                )
+            return jsonify({"answer": answer, "downloads": links})
+
+        # Small result: "all/every" -> list each row; otherwise a friendly answer.
+        if wants_full_list(question):
             return jsonify({"answer": format_full_list(result)})
 
         answer = generate_answer(question, result)
@@ -270,10 +382,8 @@ def ask():
 
 
 # ===========================
-# Database Viewer  (/data)
+# Export  (/export)  — Excel / PDF download
 # ===========================
-
-DATA_TABLES = ["users", "products", "orders", "order_items"]
 
 # union of all field names seen across a collection's documents
 def _collect_columns(rows):
@@ -283,6 +393,44 @@ def _collect_columns(rows):
             if k not in cols:
                 cols.append(k)
     return cols
+
+
+@app.route("/export")
+def export():
+    """Stream the result of a saved query as an .xlsx or .pdf download."""
+
+    token = request.args.get("q", "")
+    fmt = request.args.get("fmt", "xlsx").lower()
+
+    try:
+        collection, pipeline = decode_query(token)
+        rows = run_query(collection, pipeline)
+    except Exception as e:
+        app.logger.error("Export failed for token %r: %s", token, e)
+        return "Invalid or expired download link.", 400
+
+    cols = _collect_columns(rows)
+
+    if fmt == "pdf":
+        buf = rows_to_pdf(rows, cols, title=collection)
+        return send_file(
+            buf, mimetype="application/pdf",
+            as_attachment=True, download_name=f"{collection}.pdf",
+        )
+
+    buf = rows_to_excel(rows, cols)
+    return send_file(
+        buf,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True, download_name=f"{collection}.xlsx",
+    )
+
+
+# ===========================
+# Database Viewer  (/data)
+# ===========================
+
+DATA_TABLES = ["users", "products", "orders", "order_items"]
 
 DATA_PAGE = """
 <!doctype html>
