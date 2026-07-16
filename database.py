@@ -21,6 +21,11 @@ COMMON_WORDS = {
     "item", "items", "money", "much", "many", "total", "amount", "spend",
     "spent", "get", "got", "show", "list", "all", "any", "name", "names",
     "customer", "customers", "user", "users", "quantity", "number",
+    # short connectives: without these a phrase can start with one and the
+    # typed text echoed back reads "of iphon 15" instead of "iphon 15"
+    "of", "in", "on", "at", "to", "by", "as", "an", "or", "but", "not",
+    "me", "my", "you", "your", "it", "its", "give", "tell", "find", "want",
+    "need", "please", "top", "most", "least", "best", "each", "every",
 }
 
 # ===========================
@@ -171,6 +176,101 @@ def is_empty_result(result):
 # Fuzzy "Did you mean?" Suggestions
 # ===========================
 
+# Longest phrase compared against a name. Real names here run 1-3 words
+# ("Ravi", "iPhone SE", "Samsung Galaxy S23"); scanning wider just invites
+# question words into the match.
+MAX_NAME_WORDS = 3
+
+
+def _is_name_like(words):
+    """
+    True if `words` (already lowercased) could plausibly be a name.
+
+    A name never begins with a question word or a bare number, and never ends
+    with a question word — trailing digits are fine, since "iPhone 13" is a
+    perfectly good name. Without those edge rules the scan below would test
+    phrases like "cost iphone 13", which fuzzy-matches the junk "iPhone 193".
+    """
+
+    if not words:
+        return False
+
+    first, last = words[0], words[-1]
+
+    if first in COMMON_WORDS or first.isdigit() or last in COMMON_WORDS:
+        return False
+
+    # at least one real word, so a lone number never matches a product
+    return any(len(w) >= 3 and not w.isdigit() for w in words)
+
+
+def _numbers(text):
+    """The distinct numbers in a string ("iPhone 13" -> {"13"})."""
+
+    return set(re.findall(r"\d+", text))
+
+
+def _best_name(phrase, lower_names):
+    """
+    Closest known name to `phrase`, or None if nothing is close enough.
+
+    A model number is an identity, not a spelling, so it must match exactly.
+    Fuzzily it does not: "iPhone 13" scores 0.95 against the catalogue's
+    "iPhone 193" (the digits "13" sit inside "193") — a better score than the
+    real "iPhone 15" — so a plain ratio suggests obvious nonsense. Requiring
+    equal numbers means a missing model is honestly reported as not found,
+    while a genuine typo ("iphon 15" -> "iPhone 15") is still caught.
+    """
+
+    phrase_numbers = _numbers(phrase)
+
+    scored = []
+
+    for name in lower_names:
+
+        if _numbers(name) != phrase_numbers:
+            continue
+
+        # 0.75 cutoff: real typos (sneh->sneha, ravii->ravi) score ~0.88,
+        # while unrelated words (price->priya ~0.6) stay below the bar.
+        ratio = difflib.SequenceMatcher(None, phrase, name).ratio()
+
+        if ratio >= 0.75:
+            # Tie-break on the shortest, then alphabetically first name, so
+            # equally-close candidates resolve stably instead of by difflib's
+            # arbitrary ordering.
+            scored.append((-ratio, len(name), name))
+
+    if not scored:
+        return None
+
+    return min(scored)[2]
+
+
+def _mask_known_names(question, lower_names):
+    """
+    Blank out any known name that already appears in the question as a whole
+    phrase, and return what's left.
+
+    Without this, a multi-word name can never be seen as already-correct: the
+    word-by-word scan below would read the "iPhone" of an already-correct
+    "iPhone SE" as a typo *of* "iPhone SE" and suggest it again, so answering
+    "yes" re-asks the same question forever.
+
+    Longest names first, so "iPhone SE" is consumed before a bare "iPhone".
+    """
+
+    masked = question
+
+    for name in sorted(lower_names, key=len, reverse=True):
+        # (?<![A-Za-z]) / (?![A-Za-z]) = phrase boundaries that, unlike \b,
+        # still hold for names containing spaces or punctuation.
+        pattern = r"(?<![A-Za-z])" + re.escape(name) + r"(?![A-Za-z])"
+        masked = re.sub(pattern, " ", masked, flags=re.IGNORECASE)
+
+    return masked
+
+
 def find_similar_names(question):
     """
     Look at each word in the user's question and, if it looks like a
@@ -185,30 +285,47 @@ def find_similar_names(question):
     lookup = {name.lower(): name for name in known}
     lower_names = list(lookup.keys())
 
-    # split the question into candidate words (letters only, 3+ chars)
-    words = re.findall(r"[A-Za-z]{3,}", question)
+    # Ignore names that are already spelled correctly, so a correct name is
+    # never "corrected" into a different one.
+    question = _mask_known_names(question, lower_names)
+
+    # Tokens keep digits: product names are often "<word> <number>"
+    # ("iPhone 13"), and a letters-only scan would drop the number and match
+    # the bare word to an arbitrary model.
+    tokens = list(re.finditer(r"[A-Za-z0-9]{2,}", question))
 
     suggestions = []
     seen = set()
 
-    for word in words:
+    i = 0
+    while i < len(tokens):
 
-        w = word.lower()
+        # Longest phrase first: "iphone 13" should beat a bare "iphone", which
+        # on its own is equally close to every iPhone in the catalogue.
+        for size in range(min(MAX_NAME_WORDS, len(tokens) - i), 0, -1):
 
-        # skip ordinary question words so e.g. "price" isn't matched to "Priya"
-        if w in COMMON_WORDS:
-            continue
+            span = tokens[i:i + size]
+            phrase = question[span[0].start():span[-1].end()]
 
-        # skip words that already exactly match a known name
-        if w in lookup:
-            continue
+            if not _is_name_like([t.group().lower() for t in span]):
+                continue
 
-        # 0.75 cutoff: real typos (sneh->sneha, ravii->ravi) score ~0.88,
-        # while unrelated words (price->priya ~0.6) stay below the bar.
-        matches = difflib.get_close_matches(w, lower_names, n=1, cutoff=0.75)
+            # A number right after the phrase belongs to it: "iphone" out of
+            # "iphone 13" must not be tested alone, or — the model number
+            # dropped — it matches whichever iPhone happens to be closest.
+            following = tokens[i + size] if i + size < len(tokens) else None
+            if following is not None and following.group().isdigit():
+                continue
 
-        if matches and matches[0] not in seen:
-            suggestions.append((word, lookup[matches[0]]))
-            seen.add(matches[0])
+            match = _best_name(phrase.lower(), lower_names)
+
+            if match:
+                if match not in seen:
+                    suggestions.append((phrase, lookup[match]))
+                    seen.add(match)
+                i += size  # consume the whole phrase
+                break
+        else:
+            i += 1
 
     return suggestions

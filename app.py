@@ -385,6 +385,7 @@ def ask():
 
         # If there's a pending "Did you mean X?", interpret short yes/no replies
         # (auto-correcting typos like "yesw"/"noo").
+        just_corrected = False
         if last_suggestion["question"]:
             reply = classify_reply(question)
             if reply == "yes":
@@ -394,9 +395,19 @@ def ask():
                         re.escape(typed), real, question, flags=re.IGNORECASE
                     )
                 last_suggestion["question"] = None  # consume it
+                just_corrected = True
             elif reply == "no":
                 last_suggestion["question"] = None
                 return jsonify({"answer": "No problem! What would you like to know?"})
+
+        # A bare "yes"/"no" with nothing pending is not a question. Passing it to
+        # the LLM turns it into a query that matches everything and dumps the
+        # whole database back at the user.
+        if not just_corrected and classify_reply(question):
+            return jsonify({
+                "answer": "There's nothing for me to confirm right now — "
+                          "what would you like to know?"
+            })
 
         # "give me all raw data / everything" -> the full denormalized dataset
         # (users, products, quantity, price, city, order_date...). Skip the LLM.
@@ -411,7 +422,16 @@ def ask():
         # If nothing matched, check for close (misspelled) names and ask
         # for confirmation instantly — no extra LLM call, so it's fast.
         if is_empty_result(result):
-            suggestions = find_similar_names(question)
+            # Never suggest again right after applying a correction: the name is
+            # already the real one, so re-suggesting it would loop on "yes".
+            suggestions = [] if just_corrected else find_similar_names(question)
+
+            if just_corrected:
+                return jsonify({
+                    "answer": "I looked that up, but there are no records for it. "
+                              "Try another customer or product name."
+                })
+
             if suggestions:
                 last_suggestion.update(question=question, pairs=suggestions)
 
