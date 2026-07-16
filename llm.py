@@ -127,6 +127,28 @@ or made by OpenAI.
     return response.text.strip()
 
 
+def answer_from_profile(question, profile_text):
+    """Answer a question using ONLY the stored profile/bio text."""
+
+    prompt = f"""
+Answer the user's question using ONLY the profile text below. Be concise,
+factual, and friendly. If the answer is not in the profile, say you don't have
+that information. Do not begin with a greeting.
+
+Profile:
+{profile_text}
+
+Question: {question}
+"""
+
+    response = client.models.generate_content(
+        model=MODEL_NAME,
+        contents=prompt,
+    )
+
+    return response.text.strip()
+
+
 def format_full_list(result):
     """Return EVERY row as a plain numbered list (no AI summary).
 

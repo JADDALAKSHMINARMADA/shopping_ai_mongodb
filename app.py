@@ -4,8 +4,13 @@ import json
 import base64
 import difflib
 from flask import Flask, request, jsonify, render_template_string, send_file
-from llm import generate_query, generate_answer, format_full_list, MODEL_NAME
-from database import run_query, find_all, find_similar_names, is_empty_result
+from llm import (
+    generate_query, generate_answer, format_full_list, answer_from_profile,
+    MODEL_NAME,
+)
+from database import (
+    run_query, find_all, find_similar_names, is_empty_result, get_profile,
+)
 from export_utils import rows_to_excel, rows_to_pdf
 
 app = Flask(__name__)
@@ -31,6 +36,15 @@ IDENTITY_RE = re.compile(
 IDENTITY_ANSWER = (
     "I'm the Shopping Assistant, powered by Google's Gemini AI "
     f"(model {MODEL_NAME})."
+)
+
+# --- Profile Q&A: questions about the developer's bio are answered from the
+# stored profile text, not the shopping database. ---
+PROFILE_RE = re.compile(
+    r"\b(narmada|jadda|lakshmi|resume|bio|cgpa|internship|certification|"
+    r"skills|projects?|education|qualification|developer|"
+    r"who\s+(made|created|built|developed|designed))\b",
+    re.IGNORECASE,
 )
 
 # --- Full-list intent: "all / every / each" (but NOT "summary") means the user
@@ -303,6 +317,13 @@ def ask():
         # the LLM can't hallucinate a wrong model (e.g. GPT-4o).
         if IDENTITY_RE.search(question):
             return jsonify({"answer": IDENTITY_ANSWER})
+
+        # Questions about the developer's profile/bio are answered from the
+        # stored profile text, not the shopping database.
+        if PROFILE_RE.search(question):
+            profile = get_profile()
+            if profile:
+                return jsonify({"answer": answer_from_profile(question, profile)})
 
         # If there's a pending "Did you mean X?", interpret short yes/no replies
         # (auto-correcting typos like "yesw"/"noo").

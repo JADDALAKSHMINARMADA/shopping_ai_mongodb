@@ -117,6 +117,14 @@ def find_all(collection):
     return list(db[collection].find({}, {"_id": 0}))
 
 
+def get_profile():
+    """Return the stored developer profile text (or '' if none)."""
+
+    db = get_db()
+    doc = db.profile.find_one({}, {"_id": 0})
+    return doc.get("content", "") if doc else ""
+
+
 # ===========================
 # Name lists (for "did you mean?")
 # ===========================
